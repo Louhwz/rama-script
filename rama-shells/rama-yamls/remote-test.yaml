@@ -1,0 +1,47 @@
+---
+apiVersion: networking.alibaba.com/v1
+kind: RemoteSubnet
+metadata:
+  name: remote-overlay-subnet
+spec:
+  range:
+    version: "4"
+    cidr: "10.14.110.0/24"
+    start: "10.14.110.10"
+    end: "10.14.110.50"
+    gateway: "10.14.110.1"
+    excludeIPs:
+      - "10.14.110.30"
+  type: Overlay
+  clusterName: "pseudo-remote-cluster"
+  tunnelNetID: 4
+
+---
+apiVersion: networking.alibaba.com/v1
+kind: RemoteSubnet
+metadata:
+  name: remote-underlay-subnet
+spec:
+  range:
+    version: "4"
+    cidr: "192.168.156.0/24"
+    start: "192.168.156.17"
+    end: "192.168.156.32"
+    gateway: "192.168.156.1"
+    excludeIPs:
+      - "192.168.156.20"
+  clusterName: "pseudo-remote-cluster"
+
+---
+apiVersion: networking.alibaba.com/v1
+kind: RemoteVtep
+metadata:
+  name: remote-vtep-1
+spec:
+  clusterName: "pseudo-remote-cluster"
+  nodeName: vtep-1
+  vtepIP: "192.168.57.1"
+  vtepMAC: "ca:fe:ca:fe:ca:fe"
+  ipList:
+    - "10.14.110.18"
+    - "10.14.110.19"

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traceroute-underlay
+spec:
+  selector:
+    matchLabels:
+      app: traceroute
+      net: underlay
+      netid: 1-1
+  replicas: 3
+  template:
+    metadata:
+      annotations:
+        networking.alibaba.com/network-type: Underlay
+        networking.alibaba.com/specified-network: underlay-network1
+      labels:
+        app: curl
+    spec:
+      containers:
+        - args:
+            - -c
+            - sleep 999999999
+          command:
+            - /bin/sh
+          name: curl
+          image: gophernet/traceroute:latest

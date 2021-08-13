@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: curl-underlay
+spec:
+  selector:
+    matchLabels:
+      app: curl-underlay
+  replicas: 3
+  template:
+    metadata:
+      annotations:
+        networking.alibaba.com/network-type: Underlay
+        networking.alibaba.com/specified-network: underlay-network1
+      labels:
+        app: curl-underlay
+    spec:
+      containers:
+        - args:
+            - -c
+            - sleep 999999999
+          command:
+            - /bin/sh
+          name: curl
+          image: curlimages/curl:latest

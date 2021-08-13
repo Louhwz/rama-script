@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o pipefail
+
+PACKAGE=$0
+LOCAL_HOSTNAME=$(hostname)
+DEV_NAME='eth1'
+PARENT_DEV='eth0'
+NET_ID=100
+UDP_PORT=4096
+CIDR="192.168.56.0/24"
+IP=""
+CONFIG_FILE='vtep.cfg'
+
+while test $# -gt 0; do
+  case "$1" in
+    -h|--help)
+      echo "$PACKAGE - build a static VXLAN network"
+      echo " "
+      echo "$PACKAGE [options] application [arguments]"
+      echo " "
+      echo "options:"
+      echo "-h, --help                show brief help"
+      echo "--dev=DEV                 specify a vxlan network device name, default to $DEV_NAME"
+      echo "--parent-dev=PARENT_DEV   specify a parent device, default to $PARENT_DEV"
+      echo "--vnid=NET_ID             specify a vnid for vxlan encapsulation, default to $NET_ID"
+      echo "--port=PORT               specify a port for vxlan encapsulation, default to $UDP_PORT"
+      echo "--cidr=CIDR               specify a cidr for vxlan network, default to $CIDR"
+      echo "--addr=ADDR               specify a ip addr within the vxlan network"
+      echo "--vtep-file=FILE          specify vtep config file, default to $CONFIG_FILE"
+      exit 0
+      ;;
+    --dev*)
+      DEV_NAME=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --parent-dev*)
+      PARENT_DEV=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --vnid*)
+      NET_ID=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --port*)
+      UDP_PORT=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --cidr*)
+      CIDR=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --addr*)
+      IP=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --vtep-file*)
+      CONFIG_FILE=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [ `grep -c "$LOCAL_HOSTNAME" "$CONFIG_FILE"` == '0' ]; then
+    echo "$LOCAL_HOSTNAME is not in $CONFIG_FILE, skip it"
+else
+    echo "Running for config [dev=$DEV_NAME, parent-dev=$PARENT_DEV, vnid=$NET_ID, port=$UDP_PORT, cidr=$CIDR, addr=$IP, vtep-file=$CONFIG_FILE]"
+
+    LOCAL_NODE_IP=$(cat "$CONFIG_FILE" | grep "$LOCAL_HOSTNAME" | awk '{print $2}')
+    LOCAL_VTEP_MAC=$(cat "$CONFIG_FILE" | grep "$LOCAL_HOSTNAME" | awk '{print $3}')
+
+    echo "Setting up local VXLAN device [node_inet=$LOCAL_NODE_IP, vtep_mac=$LOCAL_VTEP_MAC]..."
+
+    sudo ip link add "$DEV_NAME" address "$LOCAL_VTEP_MAC" type vxlan id "$NET_ID" local "$LOCAL_NODE_IP" dev "$PARENT_DEV" dstport "$UDP_PORT" learning
+
+    if [ -z "$IP" ]; then
+        sudo ip link set "$DEV_NAME" up
+        sudo ip route add "$CIDR" dev "$DEV_NAME"
+    else
+        sudo ip addr add "$IP" dev "$DEV_NAME"
+        sudo ip link set "$DEV_NAME" up
+        sudo ip route add "$CIDR" dev "$DEV_NAME" proto kernel scope link src "$IP"
+    fi
+
+    echo "Configuring fdb table..."
+
+    BC_MAC='00:00:00:00:00:00'
+
+    while read -r config
+    do
+        HOSTNAME=$(echo "$config" | awk '{print $1}')
+        NODE_IP=$(echo "$config" | awk '{print $2}')
+        VTEP_MAC=$(echo "$config" | awk '{print $3}')
+
+        echo "config fdb for $HOSTNAME [dst=$NODE_IP, lladdr=$VTEP_MAC]"
+        sudo bridge fdb append "$VTEP_MAC" dev "$DEV_NAME" dst "$NODE_IP" self permanent
+        sudo bridge fdb append "$BC_MAC" dev "$DEV_NAME" dst "$NODE_IP" self permanent
+    done < "$CONFIG_FILE"
+
+    echo "VXLAN device $DEV_NAME installed!"
+fi

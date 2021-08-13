@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o pipefail
+
+PACKAGE=$0
+PARENT_DEV='eth0'
+NETS_CFG='nets.cfg'
+CONN_CFG='route.cfg'
+VTEP_DIR=$(dirname "${BASH_SOURCE[0]}")
+
+while test $# -gt 0; do
+  case "$1" in
+    -h|--help)
+      echo "$PACKAGE - attempt to capture frames"
+      echo " "
+      echo "$PACKAGE [options] application [arguments]"
+      echo " "
+      echo "options:"
+      echo "-h, --help                show brief help"
+      echo "--parent-dev=PARENT_DEV   specify a parent device, default to $PARENT_DEV"
+      echo "--nets-file=FILE          specify nets config file, default to $NETS_CFG"
+      echo "--route-file=FILE         specify route config file, default to $CONN_CFG"
+      echo "--vtep-dir=FILE           specify vtep config directory, default to $VTEP_DIR"
+      exit 0
+      ;;
+    --parent-dev*)
+      PARENT_DEV=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --nets-file*)
+      NETS_CFG=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --route-file*)
+      CONN_CFG=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --vtep-dir*)
+      VTEP_DIR=`echo $1 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+LOCAL_HOSTNAME=$(hostname)
+
+while read -r config
+do
+    NET_NAME=$(echo "$config" | awk '{print $1}')
+    CIDR=$(echo "$config" | awk '{print $2}')
+    DEV_NAME=$(echo "$config" | awk '{print $3}')
+    NET_ID=$(echo "$config" | awk '{print $4}')
+    PORT=$(echo "$config" | awk '{print $5}')
+    GATEWAY_HOSTNAME=$(echo "$config" | awk '{print $6}')
+    GATEWAY_IP=$(echo "$config" | awk '{print $7}')
+
+    NET_VTEP_CFG="$VTEP_DIR/$NET_NAME.vtep.cfg"
+
+    CHECK=$(cat "$NET_VTEP_CFG")
+    if [ -z "$CHECK" ]; then
+        echo "cannot find config for $LOCAL_HOSTNAME inside $NET_NAME"
+        exit
+    fi
+
+    echo "working on [$config]..."
+
+    if [ "$LOCAL_HOSTNAME" == "$GATEWAY_HOSTNAME" ]; then
+        ./build-static-vxlan --cidr="$CIDR" --vnid="$NET_ID" --dev="$DEV_NAME" --parent-dev="$PARENT_DEV" --port="$PORT" --addr="$GATEWAY_IP" --vtep-file="$NET_VTEP_CFG"
+        sudo sysctl net.ipv4.ip_forward=1
+        sudo iptables -P FORWARD ACCEPT
+    else
+        ./build-static-vxlan --cidr="$CIDR" --vnid="$NET_ID" --dev="$DEV_NAME" --parent-dev="$PARENT_DEV" --port="$PORT" --vtep-file="$NET_VTEP_CFG"
+    fi
+
+done < "$NETS_CFG"
+
+while read -r config
+do
+    NET_NAME_1=$(echo "$config" | awk '{print $1}')
+    NET_NAME_2=$(echo "$config" | awk '{print $2}')
+
+    LOCAL_VTEP_NET_1="$VTEP_DIR/$NET_NAME_1.vtep.cfg"
+    LOCAL_VTEP_NET_2="$VTEP_DIR/$NET_NAME_2.vtep.cfg"
+
+    TO_CIDR=""
+    VIA_IP=""
+    VIA_MAC=""
+    VIA_DEV=""
+
+    if [ `grep -c "$LOCAL_HOSTNAME" "$LOCAL_VTEP_NET_1"` == '0' ]; then
+        if [ `grep -c "$LOCAL_HOSTNAME" "$LOCAL_VTEP_NET_2"` == '0' ]; then
+            continue
+        else
+            # this host is inside net 2, outside net 1
+            TO_CIDR=$(cat "$NETS_CFG" | grep "$NET_NAME_1" | awk '{print $2}')
+            VIA_IP=$(cat "$NETS_CFG" | grep "$NET_NAME_2" | awk '{print $7}')
+            VIA_HOST=$(cat "$NETS_CFG" | grep "$NET_NAME_2" | awk '{print $6}')
+            VIA_MAC=$(cat "$VTEP_DIR/$NET_NAME_2.vtep.cfg" | grep "$VIA_HOST" | awk '{print $3}')
+            VIA_DEV=$(cat "$NETS_CFG" | grep "$NET_NAME_2" | awk '{print $3}')
+        fi
+    else
+        if [ `grep -c "$LOCAL_HOSTNAME" "$LOCAL_VTEP_NET_2"` == '0' ]; then
+            # this host is inside net 1, outside net 2
+            TO_CIDR=$(cat "$NETS_CFG" | grep "$NET_NAME_2" | awk '{print $2}')
+            VIA_IP=$(cat "$NETS_CFG" | grep "$NET_NAME_1" | awk '{print $7}')
+            VIA_HOST=$(cat "$NETS_CFG" | grep "$NET_NAME_1" | awk '{print $6}')
+            VIA_MAC=$(cat "$VTEP_DIR/$NET_NAME_1.vtep.cfg" | grep "$VIA_HOST" | awk '{print $3}')
+            VIA_DEV=$(cat "$NETS_CFG" | grep "$NET_NAME_1" | awk '{print $3}')
+        else
+            # router
+            continue
+        fi
+    fi
+
+    echo "route $TO_CIDR via $VIA_HOST [$VIA_IP, $VIA_MAC] dev $VIA_DEV"
+
+    sudo ip route add "$TO_CIDR" via "$VIA_IP" dev "$VIA_DEV" onlink
+    sudo ip neigh add "$VIA_IP" lladdr "$VIA_MAC" dev "$VIA_DEV"
+
+done < "$CONN_CFG"
+
+echo "Done!"

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-underlay
+spec:
+  selector:
+    matchLabels:
+      app: products
+      department: sales
+      net: underlay
+  replicas: 3
+  template:
+    metadata:
+      annotations:
+        networking.alibaba.com/network-type: Underlay
+        networking.alibaba.com/specified-network: underlay-network1
+      labels:
+        app: products
+        department: sales
+        net: underlay
+    spec:
+      containers:
+        - name: hello
+          image: "gcr.io/google-samples/hello-app:2.0"
+          env:
+            - name: "PORT"
+              value: "39253"
